@@ -3,6 +3,7 @@
 # vim: fenc=utf-8 ts=4 sw=4 et
 
 import cv2
+import time
 from colordetection import color_detector
 from config import config
 from helpers import get_next_locale
@@ -23,6 +24,7 @@ from constants import (
     STICKER_CONTOUR_COLOR,
     CALIBRATE_MODE_KEY,
     SWITCH_LANGUAGE_KEY,
+    DEBUG_KEY,
     TEXT_SIZE,
     E_INCORRECTLY_SCANNED,
     E_ALREADY_SOLVED
@@ -55,6 +57,8 @@ class Webcam:
         self.calibrated_colors = {}
         self.current_color_to_calibrate_index = 0
         self.done_calibrating = False
+
+        self.debug = False
 
     def draw_stickers(self, stickers, offset_x, offset_y):
         """Draws the given stickers onto the given frame."""
@@ -98,11 +102,18 @@ class Webcam:
         """Find the contours of a 3x3x3 cube."""
         contours, hierarchy = cv2.findContours(dilatedFrame, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         final_contours = []
+        getFrame = cv2.cvtColor(dilatedFrame, cv2.COLOR_GRAY2BGR)
+        if self.debug:
+            # getFrame = cv2.drawContours(getFrame, contours, -1, (0, 0, 255), 3)
+            # print(dilatedFrame.shape, colorFrame.shape, len(contours))
+            pass
 
         # Step 1/4: filter all contours to only those that are square-ish shapes.
         for contour in contours:
             perimeter = cv2.arcLength(contour, True)
             approx = cv2.approxPolyDP(contour, 0.1 * perimeter, True)
+            if self.debug:
+                getFrame = cv2.drawContours(getFrame, [approx], -1, (0, 255, 0), 3)
             if len (approx) == 4:
                 area = cv2.contourArea(contour)
                 (x, y, w, h) = cv2.boundingRect(approx)
@@ -111,8 +122,14 @@ class Webcam:
                 ratio = w / float(h)
 
                 # Check if contour is close to a square.
-                if ratio >= 0.8 and ratio <= 1.2 and w >= 30 and w <= 60 and area / (w * h) > 0.4:
+                # lowerbound of w cannot be reduced!
+                if ratio >= 0.8 and ratio <= 1.2 and area / (w * h) > 0.4 and w >= 30:
+                    if self.debug:
+                        getFrame = cv2.rectangle(getFrame, (x, y), (x+w, y+h), (0, 0, 255), 2)
                     final_contours.append((x, y, w, h))
+
+        if self.debug:
+            cv2.imshow("Qbr - Rubik's cube solver", getFrame)
 
         # Return early if we didn't found 9 or more contours.
         if len(final_contours) < 9:
@@ -165,14 +182,15 @@ class Webcam:
                 [(center_x + w * radius), (center_y + h * radius)],
             ]
 
-            for neighbor in final_contours:
-                (x2, y2, w2, h2) = neighbor
-                for (x3, y3) in neighbor_positions:
+            for (x3, y3) in neighbor_positions:
+                for neighbor in final_contours:
+                    (x2, y2, w2, h2) = neighbor
                     # The neighbor_positions are located in the center of each
                     # contour instead of top-left corner.
                     # logic: (top left < center pos) and (bottom right > center pos)
                     if (x2 < x3 and y2 < y3) and (x2 + w2 > x3 and y2 + h2 > y3):
                         contour_neighbors[index].append(neighbor)
+                        break
 
         # Step 3/4: Now that we know how many neighbors all contours have, we'll
         # loop over them and find the contour that has 9 neighbors, which
@@ -187,6 +205,12 @@ class Webcam:
 
         if not found:
             return []
+
+        if self.debug:
+            for c in final_contours:
+                x, y, w, h = c
+                getFrame = cv2.rectangle(getFrame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+            cv2.imshow("Qbr - Rubik's cube solver", getFrame)
 
         # Step 4/4: When we reached this part of the code we found a cube-like
         # contour. The code below will sort all the contours on their X and Y
@@ -492,13 +516,18 @@ class Webcam:
                 self.reset_calibrate_mode()
                 self.calibrate_mode = not self.calibrate_mode
 
+            # Toggle debug print.
+            if key == ord(DEBUG_KEY):
+                self.debug = not self.debug
+
             grayFrame = cv2.cvtColor(self.frame, cv2.COLOR_BGR2GRAY)
             blurredFrame = cv2.blur(grayFrame, (3, 3))
             cannyFrame = cv2.Canny(blurredFrame, 30, 60, 3)
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (12, 12))
             dilatedFrame = cv2.dilate(cannyFrame, kernel)
 
             contours = self.find_contours(dilatedFrame)
+
             if len(contours) == 9:
                 self.draw_contours(contours)
                 if not self.calibrate_mode:
@@ -525,7 +554,11 @@ class Webcam:
                 self.draw_scanned_sides()
                 self.draw_2d_cube_state()
 
-            cv2.imshow("Qbr - Rubik's cube solver", self.frame)
+            if self.debug:
+                pass
+            else:
+                cv2.imshow("Qbr - Rubik's cube solver", self.frame)
+                # cv2.imshow("Qbr - Rubik's cube solver", dilatedFrame)
 
         self.cam.release()
         cv2.destroyAllWindows()
